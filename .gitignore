@@ -1,0 +1,22 @@
+.build/
+dist/
+.DS_Store
+
+# Local credentials and machine configuration
+.env
+.env.*
+!.env.example
+.ssh/
+.aws/
+.swiftpm/
+.vscode/
+.idea/
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+*.rtsz
+*.rdp
+local-data/
+/Workspace*.json
