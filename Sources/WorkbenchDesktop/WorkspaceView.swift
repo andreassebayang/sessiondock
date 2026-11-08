@@ -36,7 +36,7 @@ public struct WorkspaceView: View {
             }
             ToolbarItemGroup {
                 Button { if let id = model.selectedConnectionID { model.openTab(id) } } label: { Label("Open Configuration", systemImage: "rectangle.on.rectangle") }.disabled(model.selected == nil)
-                Button { model.connectSelected() } label: { Label("Connect", systemImage: "play.fill") }.disabled(!model.canConnect).help("Connect using SSH or Web")
+                Button { model.connectSelected() } label: { Label("Connect", systemImage: "play.fill") }.disabled(!model.canConnect).help("Connect to the selected host")
                 Button { model.selectedSession?.disconnect() } label: { Label("Disconnect", systemImage: "stop.fill") }.disabled(model.selectedSession?.isActive != true)
                 Button { Task { await model.save() } } label: { Label("Save", systemImage: "square.and.arrow.down") }.help("Save workspace (⌘S)")
             }
@@ -48,6 +48,7 @@ public struct WorkspaceView: View {
         .disabled(model.isBusy)
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in model.stopAllSessions() }
         .onReceive(NotificationCenter.default.publisher(for: .workbenchSearch)) { _ in searchFocused = true }
+        .sheet(isPresented: $model.showsVault) { VaultManager(model: model) }
         .sheet(isPresented: $model.showsEditor) { if let draft = model.editingConnection { ConnectionEditor(model: model, draft: draft) } }
         .sheet(isPresented: $model.showsFolderEditor) { FolderEditor(model: model, draft: model.editingFolder ?? FolderRecord(parentID: model.selectedFolderID, name: "")) }
         .sheet(item: $model.transfer) { TransferPreview(model: model, state: $0) }
@@ -139,8 +140,8 @@ public struct WorkspaceView: View {
             Divider()
             LabeledContent("Host", value: c.host)
             LabeledContent("Port", value: String(c.port))
-            Text([ConnectionKind.ssh, .web].contains(c.kind) ? "Connect to start a session. SSH host fingerprints and authentication prompts appear in the terminal." : "The \(c.kind.title) adapter is not available in this version. No remote session has been started.").foregroundStyle(.secondary)
-            if [.ssh, .web].contains(c.kind) { Button("Connect") { model.selectedConnectionID = c.id; model.connectSelected() } }
+            Text("Connect to start a session. Remote desktop adapters are experimental. SSH host fingerprints and authentication prompts appear in the terminal.").foregroundStyle(.secondary)
+            if ConnectionKind.allCases.contains(c.kind) { Button("Connect") { model.selectedConnectionID = c.id; model.connectSelected() } }
             Button("Edit Configuration") { model.selectedConnectionID = c.id; model.editSelected() }
             Spacer()
         }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -155,7 +156,7 @@ public struct WorkspaceView: View {
                     GroupBox("Connection") {
                         VStack(alignment: .leading, spacing: 10) {
                             Text(c.host).textSelection(.enabled)
-                            Text("Port \(c.port)").foregroundStyle(.secondary)
+                            Text("Port \(String(c.port))").foregroundStyle(.secondary)
                             if let username = c.username { Text("User: \(username)") }
                             Text(model.sessions[c.id]?.detail ?? "Disconnected").foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
@@ -166,7 +167,7 @@ public struct WorkspaceView: View {
                     Button("Edit Properties…", action: model.editSelected)
                     Button(c.isFavorite ? "Remove Favorite" : "Add Favorite") { model.toggleFavorite(c) }
                     Divider()
-                    Text("No password stored. Local metadata is not encrypted.").font(.caption).foregroundStyle(.secondary)
+                    Text(c.credentialReference == nil ? "No saved password. Local metadata is not encrypted." : "Password reference stored. Secret remains in macOS Keychain.").font(.caption).foregroundStyle(.secondary)
                 } else {
                     Text("Select a connection to inspect its configuration.").foregroundStyle(.secondary)
                     Divider()

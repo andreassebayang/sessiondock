@@ -20,3 +20,6 @@ dist/
 *.rdp
 local-data/
 /Workspace*.json
+
+__pycache__/
+*.pyc

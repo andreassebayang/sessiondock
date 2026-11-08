@@ -12,7 +12,7 @@ import WorkbenchCore
     var sessions: [UUID: RemoteSession] = [:]
     var activeSessionCount: Int { sessions.values.filter(\.isActive).count }
     var selectedSession: RemoteSession? { (activeTabID ?? selectedConnectionID).flatMap { sessions[$0] } }
-    var canConnect: Bool { selected.map { [.ssh, .web].contains($0.kind) && !(sessions[$0.id]?.isActive ?? false) && !(sessions[$0.id]?.processRunning ?? false) } ?? false }
+    var canConnect: Bool { selected.map { !(sessions[$0.id]?.isActive ?? false) && !(sessions[$0.id]?.processRunning ?? false) } ?? false }
     public var query = ""
     public var favoritesOnly = false
     public private(set) var loadedFile: LoadedDocument?
@@ -22,19 +22,37 @@ import WorkbenchCore
     public var errorMessage: String?
     var editingConnection: ConnectionRecord?
     var showsEditor = false
+    var showsVault = false
     var showsFolderEditor = false
     var editingFolder: FolderRecord?
     var transfer: TransferState?
-    var status = "Local workspace · SSH and Web available"
+    var status = "Local workspace · Connect on demand"
+    @ObservationIgnored var vault = CredentialVault()
     public init() {}
     var selected: ConnectionRecord? { workspace.document.connections.first { $0.id == selectedConnectionID } }
     var displayed: [ConnectionRecord] { workspace.connections(matching: query, folderID: selectedFolderID, favoritesOnly: favoritesOnly) }
-    public func saveConnection(_ c: ConnectionRecord) throws {
-        try workspace.upsert(c)
-        if let session = sessions[c.id], !session.isActive, session.connection != c {
-            session.disconnect(); sessions.removeValue(forKey: c.id)
+    public func saveConnection(_ c: ConnectionRecord) throws { try saveConnection(c, password: nil, forgetCredential: false) }
+    func saveConnection(_ c: ConnectionRecord, password: String?, forgetCredential: Bool) throws {
+        var next = workspace
+        try next.upsert(c)
+        var record = c
+        if forgetCredential { record.credentialReference = nil }
+        if let password, !password.isEmpty {
+            guard [.rdp, .vnc, .sftp].contains(record.kind) else { throw ValidationError("credential-enabled adapter") }
+            record.credentialReference = nil
+            record.credentialReference = try vault.save(password, for: record)
         }
+        try next.upsert(record)
+        // Previous references may belong to another saved workspace; deletion is explicit.
+        workspace = next
+        if let session = sessions[c.id], !session.isActive, session.connection != record { session.disconnect(); sessions.removeValue(forKey: c.id) }
         selectedConnectionID = c.id; isDirty = true
+    }
+    func deleteCredential(_ reference: String) throws {
+        try vault.delete(reference: reference)
+        for var connection in workspace.document.connections where connection.credentialReference == reference {
+            connection.credentialReference = nil; try workspace.upsert(connection); isDirty = true
+        }
     }
     public func saveFolder(_ folder: FolderRecord) throws { try workspace.upsertFolder(folder); isDirty = true }
     public func openTab(_ id: UUID) {
@@ -56,6 +74,9 @@ import WorkbenchCore
     }
     func report(_ error: Error) {
         if let error = error as? ValidationError { errorMessage = error.localizedDescription }
+        else if let error = error as? DesktopSetupError { errorMessage = error.localizedDescription }
+        else if let error = error as? VaultError { errorMessage = error.localizedDescription }
+        else if let error = error as? SFTPError { errorMessage = error.localizedDescription }
         else if let error = error as? DocumentStoreError { errorMessage = error.localizedDescription }
         else { errorMessage = "The operation could not be completed. Check the file and its permissions." }
     }
@@ -114,8 +135,18 @@ import WorkbenchCore
     func stopAllSessions() { for session in sessions.values { session.disconnect() } }
     func connectSelected() {
         guard let c = selected, canConnect else { return }
+        var acknowledgesVNC = false
+        if c.kind == .vnc {
+            let alert = NSAlert(); alert.messageText = "Use unencrypted VNC transport?"
+            alert.informativeText = "This VNC adapter does not encrypt screen, keyboard, or authentication traffic. Use a trusted network or an existing encrypted tunnel. Clipboard sharing stays off."
+            alert.addButton(withTitle: "Continue with VNC"); alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            acknowledgesVNC = true
+        }
         let session = RemoteSession(connection: c)
-        do { try session.connect(); sessions[c.id] = session; openTab(c.id) } catch { report(error) }
+        do {
+            let password = [.rdp, .vnc, .sftp].contains(c.kind) ? try vault.read(for: c) : nil
+            try session.connect(password: password, vncTransportAcknowledged: acknowledgesVNC); sessions[c.id] = session; openTab(c.id) } catch { report(error) }
     }
     func requestCloseTab(_ id: UUID) {
         if sessions[id]?.isActive == true {

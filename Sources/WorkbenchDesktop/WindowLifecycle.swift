@@ -84,6 +84,8 @@ public struct WorkbenchCommands: Commands {
             Button("Edit Properties…") { model?.editSelected() }.keyboardShortcut("e").disabled(model?.selected == nil)
             Button("Duplicate") { model?.duplicateSelected() }.keyboardShortcut("d").disabled(model?.selected == nil)
             Button("Delete Connection…") { model?.deleteSelected() }.keyboardShortcut(.delete, modifiers: [.command]).disabled(model?.selected == nil)
+            Button("Saved Passwords…") { model?.showsVault = true }
+            Divider()
             Button("Connect") { model?.connectSelected() }.keyboardShortcut("k").disabled(model?.canConnect != true)
             Button("Disconnect") { model?.selectedSession?.disconnect() }.keyboardShortcut("k", modifiers: [.command, .shift]).disabled(model?.selectedSession?.isActive != true)
             Button("Open Configuration") { if let id = model?.selectedConnectionID { model?.openTab(id) } }.keyboardShortcut(.return, modifiers: [.command]).disabled(model?.selected == nil)

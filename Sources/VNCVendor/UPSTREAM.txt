@@ -1,0 +1,4 @@
+RoyalVNCKit 1.1.0, commit 92d4427c73817d8f849bb289ff190aa4b40c44ea
+Source: https://github.com/royalapplications/royalvnc
+License: MIT (LICENSE.txt). Native macOS sources only.
+Modified for SessionDock: bounded network/string/compression/frame input; reject invalid clipboard lengths; safe decompression cleanup.

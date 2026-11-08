@@ -6,6 +6,8 @@ struct ConnectionEditor: View {
     @ViewState var draft: ConnectionRecord
     @ViewState private var tags = ""
     @ViewState private var error: String?
+    @ViewState private var password = ""
+    @ViewState private var forgetCredential = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -19,6 +21,11 @@ struct ConnectionEditor: View {
                 TextField("Port", value: $draft.port, format: .number.grouping(.never))
                 if draft.kind == .web { Text("Port overrides any port in the URL.").font(.caption).foregroundStyle(.secondary) }
                 TextField("Username", text: Binding(get: { draft.username ?? "" }, set: { draft.username = $0.isEmpty ? nil : $0 }))
+                if [.rdp, .vnc, .sftp].contains(draft.kind) {
+                    SecureField(draft.credentialReference != nil ? "Replace saved password" : (draft.kind == .sftp ? "Password (optional with SSH agent)" : "Password"), text: $password)
+                    Text("Stored in this Mac’s Keychain when you save. RDP requires a username and password. Previous credentials stay in Saved Passwords until deleted.").font(.caption).foregroundStyle(.secondary)
+                    if draft.credentialReference != nil { Toggle("Detach saved password", isOn: $forgetCredential) }
+                }
                 Picker("Folder", selection: $draft.folderID) {
                     Text("Workspace root").tag(nil as UUID?)
                     ForEach(model.workspace.document.folders) { Text($0.name).tag(Optional($0.id)) }
@@ -29,11 +36,11 @@ struct ConnectionEditor: View {
                 TextField("Notes", text: $draft.notes, axis: .vertical).lineLimit(3...5)
             }.formStyle(.grouped)
             if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("editorError") }
-            Text("Passwords and private keys are never stored in this file. Metadata is not encrypted.").font(.caption).foregroundStyle(.secondary)
+            Text("Passwords stay in Keychain. Private keys stay outside the workspace file. Metadata is not encrypted.").font(.caption).foregroundStyle(.secondary)
             HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Save Connection") {
                     draft.tags = tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                    do { try model.saveConnection(draft); dismiss() } catch { self.error = error.localizedDescription }
+                    do { try model.saveConnection(draft, password: password.isEmpty ? nil : password, forgetCredential: forgetCredential); password = ""; dismiss() } catch { self.error = error.localizedDescription }
                 }.keyboardShortcut(.defaultAction)
             }
         }.padding(24).frame(width: 540)

@@ -33,7 +33,11 @@ import WorkbenchCore
     @ObservationIgnored private var activeNavigation: WKNavigation?
     private(set) var processRunning = false
     init(connection: ConnectionRecord) { self.connection = connection; super.init() }
-    func connect() throws {
+    @ObservationIgnored private(set) var sftpBrowser: SFTPBrowser?
+    @ObservationIgnored private(set) var rdpDesktop: RDPDesktop?
+    @ObservationIgnored private(set) var vncDesktop: VNCDesktop?
+    var desktopView: NSView? { rdpDesktop?.view ?? vncDesktop?.view }
+    func connect(password: String? = nil, vncTransportAcknowledged: Bool = false) throws {
         guard !isActive, !processRunning else { return }
         switch connection.kind {
         case .ssh: try startTerminal(executable: "/usr/bin/ssh", arguments: ConnectionLaunch.sshArguments(for: connection))
@@ -45,8 +49,30 @@ import WorkbenchCore
             webView = view; view.navigationDelegate = self; view.uiDelegate = self
             webGeneration = state.begin(); detail = "Loading webpage…"; currentURL = url
             view.load(URLRequest(url: url))
-        default: throw ValidationError("available connection type; choose SSH or Web")
+        case .sftp:
+            let browser = try SFTPBrowser(); let token = state.begin(); detail = "Connecting SFTP…"; sftpBrowser = browser
+            browser.onState = { [weak self] phase, detail in self?.updateAdapter(phase, detail: detail, generation: token) }
+            browser.start(connection, password: password)
+        case .rdp:
+            let desktop = RDPDesktop(); let token = state.begin(); detail = "Connecting RDP…"; rdpDesktop = desktop
+            desktop.onState = { [weak self] phase, detail in self?.updateAdapter(phase, detail: detail, generation: token) }
+            do { try desktop.start(connection, password: password) } catch { desktop.disconnect(); rdpDesktop = nil; state.didFail(generation: token); detail = "RDP connection could not start"; throw error }
+        case .vnc:
+            let desktop = try VNCDesktop(connection: connection, password: password, transportAcknowledged: vncTransportAcknowledged)
+            let token = state.begin(); detail = "Connecting VNC · Unencrypted transport"; vncDesktop = desktop
+            desktop.onState = { [weak self] phase, detail in self?.updateAdapter(phase, detail: detail, generation: token) }
+            desktop.start()
         }
+    }
+    private func updateAdapter(_ phase: SessionPhase, detail: String, generation: UUID) {
+        guard generation == state.generation, isActive else { return }
+        switch phase {
+        case .connected: state.didFinish(generation: generation)
+        case .failed: state.didFail(generation: generation)
+        case .disconnected: state.stop()
+        case .connecting: break
+        }
+        self.detail = detail
     }
     func startTerminal(executable: String, arguments: [String]) throws {
         guard !processRunning else { throw ValidationError("session already running") }
@@ -60,6 +86,9 @@ import WorkbenchCore
         guard processRunning else { state.didFail(generation: state.generation); detail = "Could not start SSH client"; throw ValidationError("SSH process launch") }
     }
     func disconnect() {
+        sftpBrowser?.disconnect(); sftpBrowser = nil
+        rdpDesktop?.disconnect(); rdpDesktop = nil
+        vncDesktop?.disconnect(); vncDesktop = nil
         state.stop(); webGeneration = nil; activeNavigation = nil; detail = "Disconnected"
         if let view = webView { view.navigationDelegate = nil; view.uiDelegate = nil; view.stopLoading(); view.removeFromSuperview() }; webView = nil
         if let terminal = terminalView {

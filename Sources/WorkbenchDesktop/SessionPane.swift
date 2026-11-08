@@ -15,7 +15,11 @@ struct SessionPane: View {
                 if !session.isActive { Button("Reconnect", action: reconnect).disabled(session.processRunning) }
             }.padding(12)
             Divider()
-            if session.connection.kind == .ssh, let terminal = session.terminalView {
+            if let browser = session.sftpBrowser {
+                SFTPBrowserPane(browser: browser, disconnect: session.disconnect)
+            } else if let desktop = session.desktopView {
+                NativeSessionView(view: desktop).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if session.connection.kind == .ssh, let terminal = session.terminalView {
                 NativeSessionView(view: terminal).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let web = session.webView {
                 NativeSessionView(view: web).frame(maxWidth: .infinity, maxHeight: .infinity)
