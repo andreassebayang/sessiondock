@@ -9,6 +9,10 @@ import WorkbenchCore
     public var selectedConnectionID: UUID?
     public private(set) var openTabIDs: [UUID] = []
     public var activeTabID: UUID?
+    var sessions: [UUID: RemoteSession] = [:]
+    var activeSessionCount: Int { sessions.values.filter(\.isActive).count }
+    var selectedSession: RemoteSession? { (activeTabID ?? selectedConnectionID).flatMap { sessions[$0] } }
+    var canConnect: Bool { selected.map { [.ssh, .web].contains($0.kind) && !(sessions[$0.id]?.isActive ?? false) && !(sessions[$0.id]?.processRunning ?? false) } ?? false }
     public var query = ""
     public var favoritesOnly = false
     public private(set) var loadedFile: LoadedDocument?
@@ -21,19 +25,23 @@ import WorkbenchCore
     var showsFolderEditor = false
     var editingFolder: FolderRecord?
     var transfer: TransferState?
-    var status = "Local workspace · Remote connections unavailable"
+    var status = "Local workspace · SSH and Web available"
     public init() {}
     var selected: ConnectionRecord? { workspace.document.connections.first { $0.id == selectedConnectionID } }
     var displayed: [ConnectionRecord] { workspace.connections(matching: query, folderID: selectedFolderID, favoritesOnly: favoritesOnly) }
     public func saveConnection(_ c: ConnectionRecord) throws {
-        try workspace.upsert(c); selectedConnectionID = c.id; isDirty = true
+        try workspace.upsert(c)
+        if let session = sessions[c.id], !session.isActive, session.connection != c {
+            session.disconnect(); sessions.removeValue(forKey: c.id)
+        }
+        selectedConnectionID = c.id; isDirty = true
     }
     public func saveFolder(_ folder: FolderRecord) throws { try workspace.upsertFolder(folder); isDirty = true }
     public func openTab(_ id: UUID) {
         guard workspace.document.connections.contains(where: { $0.id == id }) else { return }
         if !openTabIDs.contains(id) { openTabIDs.append(id) }; activeTabID = id; selectedConnectionID = id
     }
-    public func closeTab(_ id: UUID) { openTabIDs.removeAll { $0 == id }; if activeTabID == id { activeTabID = openTabIDs.last } }
+    public func closeTab(_ id: UUID) { sessions.removeValue(forKey: id)?.disconnect(); openTabIDs.removeAll { $0 == id }; if activeTabID == id { activeTabID = openTabIDs.last } }
     public func deleteFolder(_ id: UUID) throws {
         let removed = try workspace.removeFolder(id: id)
         for id in removed { closeTab(id) }
@@ -41,6 +49,7 @@ import WorkbenchCore
         selectedFolderID = nil; isDirty = true
     }
     public func commitImport(_ preview: ImportPreview) {
+        stopAllSessions(); sessions = [:]
         workspace = try! Workspace(document: preview.document)
         loadedFile = nil; openTabIDs = []; activeTabID = nil; selectedConnectionID = nil; selectedFolderID = nil
         query = ""; favoritesOnly = false; isDirty = true; status = "Imported workspace · Save As to create a local file"
@@ -71,7 +80,7 @@ import WorkbenchCore
     }
     func deleteSelected() {
         guard let selected else { return }
-        let alert = NSAlert(); alert.messageText = "Delete connection?"; alert.informativeText = "The selected configuration and its disconnected tab will be removed."
+        let alert = NSAlert(); alert.messageText = "Delete connection?"; alert.informativeText = "The selected configuration and tab will be removed, and its active session will be stopped."
         alert.addButton(withTitle: "Delete"); alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do { try workspace.removeConnection(id: selected.id); closeTab(selected.id); selectedConnectionID = nil; isDirty = true } catch { report(error) }
@@ -80,20 +89,46 @@ import WorkbenchCore
         let ids = workspace.folderIDs(under: folder.id)
         let count = workspace.document.connections.filter { $0.folderID.map(ids.contains) == true }.count
         let alert = NSAlert(); alert.messageText = "Delete folder and its contents?"
-        alert.informativeText = "This removes \(ids.count) folders, \(count) connections, and their tabs. This cannot be undone."
+        alert.informativeText = "This removes \(ids.count) folders, \(count) connections, and their tabs. Their active sessions will be stopped. This cannot be undone."
         alert.addButton(withTitle: "Delete"); alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn { do { try deleteFolder(folder.id) } catch { report(error) } }
     }
     func confirmDiscard() async -> Bool {
         guard !isBusy else { return false }
-        guard isDirty else { return true }
-        let alert = NSAlert(); alert.messageText = "Save changes to this workspace?"
-        alert.informativeText = "Unsaved changes will be lost if you discard them."
-        alert.addButton(withTitle: "Save"); alert.addButton(withTitle: "Discard"); alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() { case .alertFirstButtonReturn: return await save(); case .alertSecondButtonReturn: return true; default: return false }
+        if isDirty {
+            let alert = NSAlert(); alert.messageText = "Save changes to this workspace?"
+            alert.informativeText = "Unsaved changes will be lost if you discard them."
+            alert.addButton(withTitle: "Save"); alert.addButton(withTitle: "Discard"); alert.addButton(withTitle: "Cancel")
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn { if !(await save()) { return false } }
+            else if response != .alertSecondButtonReturn { return false }
+        }
+        if activeSessionCount > 0 {
+            let alert = NSAlert(); alert.messageText = "Disconnect active sessions?"
+            alert.informativeText = "This will stop \(activeSessionCount) active sessions in this window."
+            alert.addButton(withTitle: "Disconnect and Continue"); alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+        return true
+    }
+    func stopAllSessions() { for session in sessions.values { session.disconnect() } }
+    func connectSelected() {
+        guard let c = selected, canConnect else { return }
+        let session = RemoteSession(connection: c)
+        do { try session.connect(); sessions[c.id] = session; openTab(c.id) } catch { report(error) }
+    }
+    func requestCloseTab(_ id: UUID) {
+        if sessions[id]?.isActive == true {
+            let alert = NSAlert(); alert.messageText = "Disconnect and close this tab?"
+            alert.informativeText = "The active session will be stopped. The connection configuration will remain."
+            alert.addButton(withTitle: "Disconnect and Close"); alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        closeTab(id)
     }
     func newDocument() async {
         guard await confirmDiscard() else { return }
+        stopAllSessions(); sessions = [:]
         workspace = try! Workspace(document: WorkbenchDocument()); loadedFile = nil; isDirty = false
         openTabIDs = []; activeTabID = nil; selectedConnectionID = nil; selectedFolderID = nil; query = ""; favoritesOnly = false
     }
@@ -111,6 +146,7 @@ import WorkbenchCore
         do {
             let loaded = try await Task.detached { try DocumentStore.load(from: url) }.value
             if importing { transfer = .importing(try ImportPreview(data: loaded.sourceData)); return }
+            stopAllSessions(); sessions = [:]
             workspace = try Workspace(document: loaded.document); loadedFile = loaded; isDirty = false
             openTabIDs = []; activeTabID = nil; selectedConnectionID = nil; selectedFolderID = nil; query = ""; favoritesOnly = false
             status = "Opened local workspace"

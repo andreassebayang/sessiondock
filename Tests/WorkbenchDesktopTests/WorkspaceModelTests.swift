@@ -4,6 +4,15 @@ import WorkbenchCore
 @testable import WorkbenchDesktop
 
 @MainActor struct WorkspaceModelTests {
+    @Test func editingDisconnectedProfileInvalidatesOldSession() throws {
+        let model = WorkspaceModel()
+        var record = ConnectionRecord(name: "Fixture", host: "old.example", kind: .ssh)
+        try model.saveConnection(record)
+        model.sessions[record.id] = RemoteSession(connection: record)
+        record.host = "new.example"
+        try model.saveConnection(record)
+        #expect(model.sessions[record.id] == nil)
+    }
     @Test func invalidEditDoesNotChangeDocumentOrDirtyState() throws {
         let m = WorkspaceModel()
         let before = m.workspace.document
@@ -60,5 +69,30 @@ import WorkbenchCore
         #expect(m.workspace.document.connections.map(\.id) == [c.id])
         #expect(m.loadedFile?.sourceData == (try Data(contentsOf: url)))
         #expect(!m.isDirty)
+    }
+    @Test func closingTabStopsItsPTYAndPreservesConfiguration() async throws {
+        let m = WorkspaceModel()
+        let c = ConnectionRecord(name: "Fixture", host: "fixture.example", kind: .ssh)
+        try m.saveConnection(c); m.openTab(c.id)
+        let runtime = RemoteSession(connection: c)
+        try runtime.startTerminal(executable: "/bin/cat", arguments: [])
+        m.sessions[c.id] = runtime
+        m.closeTab(c.id)
+        for _ in 0..<150 { if !runtime.processRunning { break }; try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!runtime.processRunning)
+        #expect(m.sessions[c.id] == nil)
+        #expect(m.workspace.document.connections.count == 1)
+    }
+    @Test func importingWorkspaceStopsAllProcesses() async throws {
+        let m = WorkspaceModel()
+        let c = ConnectionRecord(name: "Fixture", host: "fixture.example", kind: .ssh)
+        try m.saveConnection(c); m.openTab(c.id)
+        let runtime = RemoteSession(connection: c)
+        try runtime.startTerminal(executable: "/bin/cat", arguments: [])
+        m.sessions[c.id] = runtime
+        m.commitImport(try ImportPreview(data: DocumentCodec.encode(WorkbenchDocument())))
+        for _ in 0..<150 { if !runtime.processRunning { break }; try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!runtime.processRunning)
+        #expect(m.sessions.isEmpty)
     }
 }

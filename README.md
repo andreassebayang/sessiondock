@@ -11,11 +11,11 @@ SessionDock is a native macOS application for organizing remote connection confi
 - Import preview and export with optional host and username redaction.
 - Native menus, keyboard shortcuts, and prompts for unsaved changes.
 
-Remote connections are not available in this version. The Connect button is disabled; tabs display configuration details only.
+SSH profiles open an embedded terminal using macOS OpenSSH. HTTP(S) profiles open an embedded browser with temporary website storage. Sessions stay open when switching tabs and stop when closed or disconnected. RDP, VNC, and SFTP connections are not yet available.
 
 ## Build and run
 
-Requires macOS 14 or later, Swift 6 or later, and Apple Command Line Tools or Xcode.
+Requires macOS 14 or later, Swift 6.2 or later, and Apple Command Line Tools or Xcode.
 
 ```sh
 bash scripts/build-app.sh
@@ -31,6 +31,10 @@ bash scripts/test.sh
 ```
 
 The tests cover document validation, file conflicts, collection changes, export redaction, and workspace state. Build scripts use project-local compiler caches.
+
+The Port field controls the destination port for SSH and web connections, including when a web URL contains a port.
+
+SSH uses the local SSH authentication agent and default identity files. Host-key verification stays enabled. Custom SSH configuration, forwarding, remote-triggered clipboard access, web uploads, downloads, and popup windows are disabled. Passwords entered in the terminal are handled by OpenSSH; the application does not store them.
 
 ## Data and security
 

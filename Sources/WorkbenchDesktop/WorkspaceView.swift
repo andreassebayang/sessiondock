@@ -36,7 +36,8 @@ public struct WorkspaceView: View {
             }
             ToolbarItemGroup {
                 Button { if let id = model.selectedConnectionID { model.openTab(id) } } label: { Label("Open Configuration", systemImage: "rectangle.on.rectangle") }.disabled(model.selected == nil)
-                Button {} label: { Label("Connect", systemImage: "play.fill") }.disabled(true).help("Remote connections are not available in this version")
+                Button { model.connectSelected() } label: { Label("Connect", systemImage: "play.fill") }.disabled(!model.canConnect).help("Connect using SSH or Web")
+                Button { model.selectedSession?.disconnect() } label: { Label("Disconnect", systemImage: "stop.fill") }.disabled(model.selectedSession?.isActive != true)
                 Button { Task { await model.save() } } label: { Label("Save", systemImage: "square.and.arrow.down") }.help("Save workspace (⌘S)")
             }
             ToolbarItem(placement: .automatic) {
@@ -45,6 +46,7 @@ public struct WorkspaceView: View {
             ToolbarItem { Button { showsInspector.toggle() } label: { Label("Toggle Inspector", systemImage: "sidebar.right") } }
         }
         .disabled(model.isBusy)
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in model.stopAllSessions() }
         .onReceive(NotificationCenter.default.publisher(for: .workbenchSearch)) { _ in searchFocused = true }
         .sheet(isPresented: $model.showsEditor) { if let draft = model.editingConnection { ConnectionEditor(model: model, draft: draft) } }
         .sheet(isPresented: $model.showsFolderEditor) { FolderEditor(model: model, draft: model.editingFolder ?? FolderRecord(parentID: model.selectedFolderID, name: "")) }
@@ -62,8 +64,8 @@ public struct WorkspaceView: View {
                 Button { model.editingFolder = nil; model.showsFolderEditor = true } label: { Label("New Folder", systemImage: "folder.badge.plus").frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(.secondary)
             }
             Section {
-                Text("LOCAL ONLY").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
-                Text("No active remote sessions").font(.caption).foregroundStyle(.secondary)
+                Text("SESSIONS").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                Text("\(model.activeSessionCount) active sessions").font(.caption).foregroundStyle(.secondary)
             }
         }.listStyle(.sidebar)
     }
@@ -77,7 +79,7 @@ public struct WorkspaceView: View {
                             if let c = model.workspace.document.connections.first(where: { $0.id == id }) {
                                 HStack(spacing: 5) {
                                     Button { model.activeTabID = id; model.selectedConnectionID = id } label: { Label(c.name, systemImage: c.kind.symbol) }.buttonStyle(.borderless)
-                                    Button { model.closeTab(id) } label: { Image(systemName: "xmark").font(.caption2) }.buttonStyle(.borderless).accessibilityLabel("Close tab \(c.name)")
+                                    Button { model.requestCloseTab(id) } label: { Image(systemName: "xmark").font(.caption2) }.buttonStyle(.borderless).accessibilityLabel("Close tab \(c.name)")
                                 }.padding(.horizontal, 8).padding(.vertical, 6).background(model.activeTabID == id ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
                             }
                         }
@@ -87,7 +89,9 @@ public struct WorkspaceView: View {
             }.padding(.horizontal, 12).frame(height: 42).background(.bar)
             Divider()
             if let id = model.activeTabID, let c = model.workspace.document.connections.first(where: { $0.id == id }) {
-                disconnected(c)
+                if let session = model.sessions[id] {
+                    SessionPane(session: session) { model.selectedConnectionID = session.connection.id; model.connectSelected() }
+                } else { disconnected(c) }
             } else { inventory }
         }
     }
@@ -135,7 +139,8 @@ public struct WorkspaceView: View {
             Divider()
             LabeledContent("Host", value: c.host)
             LabeledContent("Port", value: String(c.port))
-            Text("The \(c.kind.title) adapter is not available in this version. No remote session has been started.").foregroundStyle(.secondary)
+            Text([ConnectionKind.ssh, .web].contains(c.kind) ? "Connect to start a session. SSH host fingerprints and authentication prompts appear in the terminal." : "The \(c.kind.title) adapter is not available in this version. No remote session has been started.").foregroundStyle(.secondary)
+            if [.ssh, .web].contains(c.kind) { Button("Connect") { model.selectedConnectionID = c.id; model.connectSelected() } }
             Button("Edit Configuration") { model.selectedConnectionID = c.id; model.editSelected() }
             Spacer()
         }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -152,7 +157,7 @@ public struct WorkspaceView: View {
                             Text(c.host).textSelection(.enabled)
                             Text("Port \(c.port)").foregroundStyle(.secondary)
                             if let username = c.username { Text("User: \(username)") }
-                            Text("Disconnected").foregroundStyle(.secondary)
+                            Text(model.sessions[c.id]?.detail ?? "Disconnected").foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
                     }
                     EnvironmentLabel(environment: c.environment)

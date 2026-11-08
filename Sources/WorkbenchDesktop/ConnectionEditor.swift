@@ -17,6 +17,7 @@ struct ConnectionEditor: View {
                     .onChange(of: draft.kind) { old, new in if draft.port == old.defaultPort { draft.port = new.defaultPort } }
                 TextField(draft.kind == .web ? "HTTP(S) URL" : "Hostname or IP", text: $draft.host)
                 TextField("Port", value: $draft.port, format: .number.grouping(.never))
+                if draft.kind == .web { Text("Port overrides any port in the URL.").font(.caption).foregroundStyle(.secondary) }
                 TextField("Username", text: Binding(get: { draft.username ?? "" }, set: { draft.username = $0.isEmpty ? nil : $0 }))
                 Picker("Folder", selection: $draft.folderID) {
                     Text("Workspace root").tag(nil as UUID?)
